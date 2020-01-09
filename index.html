@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Guilt Trip</title>
+
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="shortcut icon" type="image/x-icon" href="docs/images/favicon.ico" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.6.0/dist/leaflet.css" integrity="sha512-xwE/Az9zrjBIphAcBb3F6JVqxf46+CDLwfLMHloNu6KEQCAWi6HcDUbeOfBIptF7tcCzusKFjFw2yuvEpDL9wQ==" crossorigin=""/>
+    <script src="https://unpkg.com/leaflet@1.6.0/dist/leaflet.js" integrity="sha512-gZwIG9x3wUXg2hdXF6+rVkLF/0Vi9U8D2Ntg4Ga5I5BZpVkVxlJWbSQtXPSiUTtC0TjtGOmxa1AJPuV0CPthew==" crossorigin=""></script>
+	
+<style type="text/css">
+    html, body {
+       height: 100%;
+    }
+    #clockToronto {
+        background-color: yellow;
+    }
+</style>
+
+</head>
+<body>
+
+<div id="mapid" style="width: 100%; height: 100%;"></div>
+<script type="text/javascript" src="airports.json"></script>
+<script>
+        
+        function carbonEmissions(_seat_class, x){
+
+            // numbers and formula taken from https://www.myclimate.org/fileadmin/user_upload/myclimate_-_home/01_Information/01_About_myclimate/09_Calculation_principles/Documents/myclimate-flight-calculator-documentation_EN.pdf
+
+            var haul, CW, E;
+            var short_haul = {
+                        "S": 153.51, // average seat number
+                        "PLF": .82, // passenger load factor 
+                        "DC": 95, // detour constant
+                        "CF": .07, // cargo factor
+                        "ECW": .96, // enconomy class weight
+                        "BCW": 1.26, // business class weight
+                        "FCW": 2.4, // first class weight
+                        "EF": 3.15, // emission factor
+                        "P": .54, // preproduction
+                        "M": 2, // multiplier 
+                        "AF": .00038, // aircraft factor
+                        "A": 11.68, // airport/infastructure
+                        "a": 0,
+                        "b": 2.714,
+                        "c": 1166.52
+            };
+
+            var long_haul = {
+                        "S": 280.21, // average seat number
+                        "PLF": .82, // passenger load factor 
+                        "DC": 95, // detour constant
+                        "CF": .26, // cargo factor
+                        "ECW": .8, // enconomy class weight
+                        "BCW": 1.54, // business class weight
+                        "FCW": 2.4, // first class weight
+                        "EF": 3.15, // emission factor
+                        "P": .54, // preproduction
+                        "M": 2, // multiplier 
+                        "AF": .00038, // aircraft factor
+                        "A": 11.68, // airport-infastructure
+                        "a": .0001,
+                        "b": 7.104,
+                        "c": 5044.93
+            };
+
+            if(x < 1500){
+                console.log("haul is short")
+                haul = short_haul
+            }else{
+                console.log("haul is long")
+                haul = long_haul
+            }
+
+            if(_seat_class == "economy"){
+                console.log("trip is economy")
+                CW = haul.ECW;
+            }else if(_seat_class == "business"){
+                console.log("trip is business")
+                CW = haul.BCW;
+            }else{
+                console.log("trip is first class")
+                CW = haul.FCW;
+            }
+            
+            E = (((haul.a*x*x + haul.b*x + haul.c)/(haul.S*haul.PLF))*(1-haul.CF)*CW*((haul.EF*haul.M)+haul.P))+(haul.AF*x)+haul.A
+            return E;
+        }
+
+        if (typeof(Number.prototype.toRadians) === "undefined") {
+            Number.prototype.toRadians = function() {
+                return this * Math.PI / 180;
+            }
+        }
+
+        function calculateDistance(start, end){
+            
+            var lat1 = start.lat;
+            var lon1 = start.lng;
+            var lat2 = end.lat;
+            var lon2 = end.lng;
+
+            var R = 6371e3; // metres
+            var φ1 = lat1.toRadians();
+            var φ2 = lat2.toRadians();
+            var Δφ = (lat2-lat1).toRadians();
+            var Δλ = (lon2-lon1).toRadians();
+
+            var a = Math.sin(Δφ/2) * Math.sin(Δφ/2) +
+                    Math.cos(φ1) * Math.cos(φ2) *
+                    Math.sin(Δλ/2) * Math.sin(Δλ/2);
+            var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+
+            var d = R * c;
+            
+            return d;
+        }
+        
+        function loadJSON(callback) {   
+            var xobj = new XMLHttpRequest();
+            xobj.overrideMimeType("application/json");
+            xobj.open('GET', '../airports.json', true);
+            xobj.onreadystatechange = function () {
+            if (xobj.readyState == 4 && xobj.status == "200") {
+                callback(JSON.parse(xobj.responseText));
+            }
+            };
+            xobj.send(null);  
+        }
+
+	var mymap = L.map('mapid', {preferCanvas: true}).setView([0, 0], 3);
+
+        var state = 0;
+        var start_latlng, end_latlng;
+        var cumulative_emissions = 0;
+        var seat_class = "economy"
+
+        loadJSON(function(json) {
+            console.log(json); // this will log out the json object
+            for (var prop in json) {
+                if(json[prop].iata != "\\N"){
+                    var circleMarker = L.circleMarker([json[prop].latitude, json[prop].longitude], {
+                        color: '#3388ff',
+                        radius:2 
+                    }).addTo(mymap)
+                    .bindPopup(json[prop].iata)
+                    .on('mouseover', function(e) {
+                        this.openPopup();
+                    })
+                    .on('mouseout', function(e) {
+                        this.closePopup();
+                    })
+                    .on('click', function(e) {
+                        if(state == 0){
+                            state = 1;
+                            start_latlng = e.latlng; 
+                            console.log(e.latlng);
+                        }else if(state == 1){
+                            state = 0;
+                            end_latlng = e.latlng; 
+                            console.log(e.latlng);
+                            var d = calculateDistance(start_latlng, end_latlng);  
+
+                            var pointList = [start_latlng, end_latlng];
+
+                            L.polyline(pointList, {
+                                color: 'red',
+                                weight: 3,
+                                opacity: 0.5,
+                                smoothFactor: 1
+
+                            }).addTo(mymap);
+                            console.log("distance = " + d);
+                            console.log("in click " + seat_class);
+                            cumulative_emissions += carbonEmissions(seat_class, d/1000);
+                            createMyControl(cumulative_emissions/1000);
+                            console.log(cumulative_emissions);
+                        }
+                    });
+                }
+            }
+        });
+
+	L.tileLayer('https://api.mapbox.com/styles/v1/{id}/tiles/{z}/{x}/{y}?access_token=pk.eyJ1IjoibWFwYm94IiwiYSI6ImNpejY4NXVycTA2emYycXBndHRqcmZ3N3gifQ.rJcFIG214AriISLbB6B5aw', {
+		maxZoom: 18,
+		attribution: 'Map data &copy; <a href="https://www.openstreetmap.org/">OpenStreetMap</a> contributors, ' +
+			'<a href="https://creativecommons.org/licenses/by-sa/2.0/">CC-BY-SA</a>, ' +
+			'Imagery © <a href="https://www.mapbox.com/">Mapbox</a>',
+		id: 'mapbox/streets-v11'
+	}).addTo(mymap);
+
+var myControl;
+function createMyControl(data) {
+    if (myControl) {
+        myControl.createContent(data, false);
+        return;
+    }
+
+    L.Control.myControl = L.Control.extend({
+            onAdd : function (map) {
+                return this.createContent(data, true);
+            },
+
+            onRemove : function (map) {
+                // Nothing to do here
+            },
+
+            createContent : function (_data, create) {
+                if (create) {
+                    this._div = L.DomUtil.create('div', 'leaflet-bar my-control');
+                }
+
+                L.DomEvent.disableClickPropagation(this._div);
+
+                var controlHeader = '<div class="my-control-header">' +
+                    '<label><strong>cumulative carbon emissions</strong></label>' +
+                    '</div>';
+                this._div.innerHTML = controlHeader + '<div><strong>' + _data.toFixed(3) + ' metric tonnes</strong></div><div>';
+                    //<select id="dropdown"><option>economy</option><option>business</option><option>first class</option></select></div>';
+                this._div.firstChild.onmousedown = this._div.firstChild.ondblclick = L.DomEvent.stopPropagation;
+                this._div.style.backgroundColor = "white";
+                this._div.style.padding = "3px"
+                return this._div;
+            }
+        });
+
+    L.control.myControl = function (opts) {
+        return new L.Control.myControl(opts);
+    }
+
+    myControl = L.control.myControl({
+            position : 'topright'
+        });
+    myControl.addTo(mymap);
+    //document.getElementById("dropdown").addEventListener("change", function(){seat_class = this.value; console.log("on change " + this.value);});
+};
+
+createMyControl(cumulative_emissions);
+
+        
+</script>
+</body>
+</html>
